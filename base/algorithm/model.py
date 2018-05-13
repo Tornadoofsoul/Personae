@@ -5,7 +5,7 @@ import json
 from abc import abstractmethod
 from helper import data_ploter
 from tensorflow.contrib import rnn
-from helper.data_logger import algorithm_logger
+from helper.data_logger import generate_algorithm_logger
 
 
 class BaseTFModel(object):
@@ -24,6 +24,11 @@ class BaseTFModel(object):
             self.batch_size = options['batch_size']
         except KeyError:
             self.batch_size = 32
+
+        try:
+            self.logger = options['logger']
+        except KeyError:
+            self.logger = generate_algorithm_logger('model')
 
         try:
             self.enable_saver = options["enable_saver"]
@@ -139,21 +144,12 @@ class BaseRLTFModel(BaseTFModel):
         except KeyError:
             self.save_episode = 10
 
-    def eval_v1(self):
-        s = self.env.reset('eval')
-        while True:
-            a = self.predict(s)
-            s_next, r, status, info = self.env.forward_v1(a)
-            s = s_next
-            if status == self.env.Done:
-                self.env.trader.log_asset(0)
-                break
-
-    def eval_v2(self):
+    def eval(self):
+        self.mode = 'test'
         s = self.env.reset('eval')
         while True:
             c, a, _ = self.predict(s)
-            s_next, r, status, info = self.env.forward_v2(c, a)
+            s_next, r, status, info = self.env.forward(c, a)
             s = s_next
             if status == self.env.Done:
                 self.env.trader.log_asset(0)
@@ -164,17 +160,17 @@ class BaseRLTFModel(BaseTFModel):
             json.dump(self.env.trader.history_profits, fp, indent=True)
 
         with open(self.save_path + '_baseline_profits.json', mode='w') as fp:
-            json.dump(self.env.trader.history_baseline_profits, fp, indent=True)
+            json.dump(self.env.trader.history_baselines, fp, indent=True)
 
         data_ploter.plot_profits_series(
-            self.env.trader.history_baseline_profits,
+            self.env.trader.history_baselines,
             self.env.trader.history_profits,
             self.save_path
         )
 
     def save(self, episode):
         self.saver.save(self.session, self.save_path)
-        algorithm_logger.warning("Episode: {} | Saver reach checkpoint.".format(episode))
+        self.logger.warning("Episode: {} | Saver reach checkpoint.".format(episode))
 
     @abstractmethod
     def save_transition(self, s, a, r, s_next):
@@ -249,11 +245,11 @@ class BaseSLTFModel(BaseTFModel):
 
     def save(self, step):
         self.saver.save(self.session, self.save_path)
-        algorithm_logger.warning("Step: {} | Saver reach checkpoint.".format(step + 1))
+        self.logger.warning("Step: {} | Saver reach checkpoint.".format(step + 1))
 
     def eval_and_plot(self):
 
-        x, label = self.env.get_stock_test_data()
+        x, label = self.env.get_test_data()
 
         y = self.predict(x)
 

@@ -5,9 +5,10 @@ import logging
 import os
 
 from algorithm import config
-from base.env.stock_market import Market
-from base.algorithm.model import BaseSLTFModel
+from base.env.market import Market
 from checkpoints import CHECKPOINTS_DIR
+from base.algorithm.model import BaseSLTFModel
+from sklearn.preprocessing import MinMaxScaler
 from helper.args_parser import model_launcher_parser
 
 
@@ -45,15 +46,17 @@ class Algorithm(BaseSLTFModel):
         self.y = self.add_fc(self.y_dense, self.y_space)
 
     def _init_op(self):
-        self.loss = tf.losses.mean_squared_error(self.y, self.label)
-        self.global_step = tf.Variable(0, trainable=False)
-        self.optimizer = tf.train.RMSPropOptimizer(self.learning_rate)
-        self.train_op = self.optimizer.minimize(self.loss)
+        with tf.variable_scope('loss'):
+            self.loss = tf.losses.mean_squared_error(self.y, self.label)
+        with tf.variable_scope('train'):
+            self.global_step = tf.Variable(0, trainable=False)
+            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            self.train_op = self.optimizer.minimize(self.loss)
         self.session.run(tf.global_variables_initializer())
 
     def train(self):
         for step in range(self.train_steps):
-            batch_x, batch_y = self.env.get_stock_batch_data(self.batch_size)
+            batch_x, batch_y = self.env.get_batch_data(self.batch_size)
             x_rnn, x_cnn = batch_x, batch_x.reshape((-1, self.seq_length, self.x_space, 1))
             _, loss = self.session.run([self.train_op, self.loss], feed_dict={self.rnn_x: x_rnn,
                                                                               self.cnn_x: x_cnn,
@@ -70,16 +73,37 @@ class Algorithm(BaseSLTFModel):
 
 
 def main(args):
-    env = Market(args.codes, **{"use_sequence": True})
+
+    # mode = args.mode
+    mode = "test"
+    # codes = args.codes
+    codes = ["600036"]
+    # codes = ["AU88", "RB88", "CU88", "AL88"]
+    market = args.market
+    train_steps = args.train_steps
+    training_data_ratio = 0.98
+    # training_data_ratio = args.training_data_ratio
+
+    env = Market(codes, start_date="2012-01-01", end_date="2018-01-01", **{
+        "market": market,
+        "use_sequence": True,
+        "scaler": MinMaxScaler,
+        "mix_index_state": True,
+        "training_data_ratio": training_data_ratio,
+    })
+
+    model_name = os.path.basename(__file__).split('.')[0]
+
     algorithm = Algorithm(tf.Session(config=config), env, env.seq_length, env.data_dim, env.code_count, **{
-        "mode": args.mode,
-        # "mode": "test",
-        "save_path": os.path.join(CHECKPOINTS_DIR, "SL", "TreNet", "model"),
-        "summary_path": os.path.join(CHECKPOINTS_DIR, "SL", "TreNet", "summary"),
+        "mode": mode,
         "hidden_size": 5,
         "enable_saver": True,
-        "enable_summary_writer": True
+        "train_steps": train_steps,
+        "enable_summary_writer": True,
+        "save_path": os.path.join(CHECKPOINTS_DIR, "SL", model_name, market, "model"),
+        "summary_path": os.path.join(CHECKPOINTS_DIR, "SL", model_name, market, "summary"),
     })
+
     algorithm.run()
     algorithm.eval_and_plot()
 

@@ -15,8 +15,9 @@ def init(context):
 
 def before_trading(context):
     if not context.has_save_data:
+        print(all_instruments(type='Future'))
         for code in config['args'].codes:
-            items = history_bars(code, 20000, '1d')
+            items = history_bars(code, 200000, '1d')
             for item in items:
                 future = Future()
                 future.code = code

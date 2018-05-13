@@ -6,11 +6,11 @@ import numpy as np
 import os
 
 from algorithm import config
+from base.env.market import Market
 from checkpoints import CHECKPOINTS_DIR
-from base.env.stock_market import Market
 from base.algorithm.model import BaseRLTFModel
-from helper.data_logger import algorithm_logger
 from helper.args_parser import model_launcher_parser
+from helper.data_logger import generate_algorithm_logger, generate_market_logger
 
 
 class Algorithm(BaseRLTFModel):
@@ -38,25 +38,31 @@ class Algorithm(BaseRLTFModel):
 
     def _init_nn(self):
         # Initialize predict actor and critic.
-        w_init, b_init = tf.random_normal_initializer(.0, .3), tf.constant_initializer(0.1)
+        w_init, b_init = tf.random_normal_initializer(.0, .001), tf.constant_initializer(0.1)
 
         with tf.variable_scope('nn'):
 
             first_dense = tf.layers.dense(self.s,
-                                          50,
+                                          64,
                                           tf.nn.relu,
                                           kernel_initializer=w_init,
                                           bias_initializer=b_init)
 
             second_dense = tf.layers.dense(first_dense,
-                                           50,
+                                           64,
                                            tf.nn.relu,
                                            kernel_initializer=w_init,
                                            bias_initializer=b_init)
 
+            # third_dense = tf.layers.dense(second_dense,
+            #                               64,
+            #                               tf.nn.relu,
+            #                               kernel_initializer=w_init,
+            #                               bias_initializer=b_init)
+
             action_prob = tf.layers.dense(second_dense,
                                           self.a_space,
-                                          tf.nn.tanh,
+                                          # tf.nn.tanh,
                                           kernel_initializer=w_init,
                                           bias_initializer=b_init)
 
@@ -70,7 +76,7 @@ class Algorithm(BaseRLTFModel):
             negative_cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=self.a_prob, labels=self.a)
             self.loss_fn = tf.reduce_mean(negative_cross_entropy * self.r)
         with tf.variable_scope('train'):
-            self.train_op = tf.train.RMSPropOptimizer(self.learning_rate * 2).minimize(self.loss_fn)
+            self.train_op = tf.train.AdamOptimizer(self.learning_rate * 2).minimize(self.loss_fn)
         self.session.run(tf.global_variables_initializer())
 
     def run(self):
@@ -82,7 +88,7 @@ class Algorithm(BaseRLTFModel):
                 s = self.env.reset(self.mode)
                 while True:
                     c, a, a_index = self.predict(s)
-                    s_next, r, status, info = self.env.forward_v2(c, a)
+                    s_next, r, status, info = self.env.forward(c, a)
                     self.save_transition(s, a_index, r, s_next)
                     s = s_next
                     if status == self.env.Done:
@@ -113,22 +119,46 @@ class Algorithm(BaseRLTFModel):
         self.r_buffer.append(r)
 
     def log_loss(self, episode):
-        algorithm_logger.warning("Episode: {0} | Actor Loss: {1:.2f}".format(episode, self.loss))
+        self.logger.warning("Episode: {0} | Actor Loss: {1:.2f}".format(episode, self.loss))
 
 
 def main(args):
-    env = Market(args.codes)
-    algorithm = Algorithm(tf.Session(config=config), env, env.trader.action_space, env.data_dim, **{
-        "mode": args.mode,
-        # "mode": "test",
-        "episodes": args.episode,
-        "save_path": os.path.join(CHECKPOINTS_DIR, "RL", "PolicyGradient", "model"),
-        "summary_path": os.path.join(CHECKPOINTS_DIR, "RL", "PolicyGradient", "summary"),
-        "enable_saver": True,
-        "enable_summary_writer": True
+    mode = args.mode
+    # mode = 'test'
+    # codes = args.codes
+    codes = ["600036"]
+    # codes = ["600036", "601998"]
+    # codes = ["AU88", "RB88", "CU88", "AL88"]
+    # codes = ["T9999"]
+    market = args.market
+    # market = 'future'
+    # episode = args.episode
+    episode = 20
+    training_data_ratio = 0.95
+    # training_data_ratio = args.training_data_ratio
+
+    model_name = os.path.basename(__file__).split('.')[0]
+
+    env = Market(codes, start_date="2012-01-01", end_date="2018-01-01", **{
+        "market": market,
+        "mix_index_state": True,
+        "logger": generate_market_logger(model_name),
+        "training_data_ratio": training_data_ratio,
     })
+
+    algorithm = Algorithm(tf.Session(config=config), env, env.trader.action_space, env.data_dim, **{
+        "mode": mode,
+        "episodes": episode,
+        "enable_saver": True,
+        "learning_rate": 0.003,
+        "enable_summary_writer": True,
+        "logger": generate_algorithm_logger(model_name),
+        "save_path": os.path.join(CHECKPOINTS_DIR, "RL", model_name, market, "model"),
+        "summary_path": os.path.join(CHECKPOINTS_DIR, "RL", model_name, market, "summary"),
+    })
+
     algorithm.run()
-    algorithm.eval_v2()
+    algorithm.eval()
     algorithm.plot()
 
 

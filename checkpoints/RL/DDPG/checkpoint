@@ -1,2 +1,0 @@
-model_checkpoint_path: "/app/mayu/checkpoints/RL/DDPG/model"
-all_model_checkpoint_paths: "/app/mayu/checkpoints/RL/DDPG/model"

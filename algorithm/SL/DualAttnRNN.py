@@ -5,9 +5,10 @@ import logging
 import os
 
 from algorithm import config
-from base.env.stock_market import Market
-from base.algorithm.model import BaseSLTFModel
+from base.env.market import Market
 from checkpoints import CHECKPOINTS_DIR
+from base.algorithm.model import BaseSLTFModel
+from sklearn.preprocessing import MinMaxScaler
 from helper.args_parser import model_launcher_parser
 
 
@@ -49,21 +50,23 @@ class Algorithm(BaseSLTFModel):
             self.s_attn_outputs = tf.nn.softmax(self.s_attn_input)
         with tf.variable_scope("2nd_decoder"):
             self.s_decoder_input = tf.multiply(self.f_decoder_outputs, self.s_attn_outputs)
-            self.s_decoder_rnn = self.add_rnn(2, self.hidden_size)
+            self.s_decoder_rnn = self.add_rnn(1, self.hidden_size)
             self.f_decoder_outputs, _ = tf.nn.dynamic_rnn(self.s_decoder_rnn, self.s_decoder_input, dtype=tf.float32)
             self.f_decoder_outputs_dense = self.add_fc(self.f_decoder_outputs[:, -1], 16)
             self.y = self.add_fc(self.f_decoder_outputs_dense, self.y_space)
 
     def _init_op(self):
-        self.loss = tf.losses.mean_squared_error(self.y, self.label)
-        self.global_step = tf.Variable(0, trainable=False)
-        self.optimizer = tf.train.RMSPropOptimizer(self.learning_rate)
-        self.train_op = self.optimizer.minimize(self.loss)
+        with tf.variable_scope('loss'):
+            self.loss = tf.losses.mean_squared_error(self.y, self.label)
+        with tf.variable_scope('train'):
+            self.global_step = tf.Variable(0, trainable=False)
+            self.optimizer = tf.train.RMSPropOptimizer(self.learning_rate)
+            self.train_op = self.optimizer.minimize(self.loss)
         self.session.run(tf.global_variables_initializer())
 
     def train(self):
         for step in range(self.train_steps):
-            batch_x, batch_y = self.env.get_stock_batch_data(self.batch_size)
+            batch_x, batch_y = self.env.get_batch_data(self.batch_size)
             _, loss = self.session.run([self.train_op, self.loss], feed_dict={self.x: batch_x, self.label: batch_y})
             if (step + 1) % 1000 == 0:
                 logging.warning("Step: {0} | Loss: {1:.7f}".format(step + 1, loss))
@@ -76,16 +79,38 @@ class Algorithm(BaseSLTFModel):
 
 
 def main(args):
-    env = Market(args.codes, **{"use_sequence": True})
+    mode = args.mode
+    # mode = "test"
+    codes = ["600036"]
+    # codes = ["600036", "601998"]
+    # codes = args.codes
+    # codes = ["AU88", "RB88", "CU88", "AL88"]
+    market = args.market
+    # train_steps = args.train_steps
+    train_steps = 30000
+    # training_data_ratio = 0.98
+    training_data_ratio = args.training_data_ratio
+
+    env = Market(codes, start_date="2008-01-01", end_date="2018-01-01", **{
+        "market": market,
+        "use_sequence": True,
+        "scaler": MinMaxScaler,
+        "mix_index_state": True,
+        "training_data_ratio": training_data_ratio,
+    })
+
+    model_name = os.path.basename(__file__).split('.')[0]
+
     algorithm = Algorithm(tf.Session(config=config), env, env.seq_length, env.data_dim, env.code_count, **{
-        "mode": args.mode,
-        # "mode": "test",
-        "save_path": os.path.join(CHECKPOINTS_DIR, "SL", "DualAttnRNN", "model"),
-        "summary_path": os.path.join(CHECKPOINTS_DIR, "SL", "DualAttnRNN", "summary"),
+        "mode": mode,
         "hidden_size": 5,
         "enable_saver": True,
-        "enable_summary_writer": True
+        "train_steps": train_steps,
+        "enable_summary_writer": True,
+        "save_path": os.path.join(CHECKPOINTS_DIR, "SL", model_name, market, "model"),
+        "summary_path": os.path.join(CHECKPOINTS_DIR, "SL", model_name, market, "summary"),
     })
+
     algorithm.run()
     algorithm.eval_and_plot()
 
